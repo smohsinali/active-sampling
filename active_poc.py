@@ -3,7 +3,6 @@ import tensorflow as tf
 import numpy as np
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
@@ -21,6 +20,7 @@ import json
 
 import warnings
 warnings.filterwarnings('ignore')
+
 
 dataset = 'CIFAR10'
 
@@ -94,32 +94,26 @@ def norm_ratios(
     In other words, the sum of all returned elements is equal to
     'sum_up_to'.
     """
-    labels_counts = collections.Counter(labels)    
-
+    labels_counts = collections.Counter(labels)
     # select a repersentative initial set of images to be annotated
     counts = list()
     for i in classes:
         counts.append(labels_counts[i])
-
     counts = np.array(counts)
     _min = counts.min() if counts.min() > 0 else 1
-    _sum = counts.sum() if counts.sum() > 0 else 1
-    
+    _sum = counts.sum() if counts.sum() > 0 else 1    
     counts = counts / _min
     counts = counts / _sum
     counts = counts * sum_up_to
     counts = counts.astype(int)
-
     if inclusion:
         # to avoid smalls clusters to be left out, we add at least one element per cluster
         counts[counts == 0] = 1
-
     while counts.sum() != sum_up_to:
         if counts.sum() > sum_up_to:
             counts[counts.argmax()] = counts[counts.argmax()] - 1
         elif counts.sum() < sum_up_to:
-            counts[counts.argmin()] = counts[counts.argmin()] + 1
-            
+            counts[counts.argmin()] = counts[counts.argmin()] + 1            
     return counts
 
 
@@ -146,36 +140,28 @@ def active_cluster(
     x_train_flat = np.reshape(
         x_train, 
         (len(x_train), x_train.shape[1] * x_train.shape[2] * x_train.shape[3])
-    )
-    
+    )    
     n_clusters = auto_cluster_size(x_train_flat, max_n_clusters)
-    p_kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(x_train_flat)
-    
+    p_kmeans = KMeans(n_clusters=n_clusters, random_state=0).fit(x_train_flat)    
     # we will use the number of elements per cluster to select the initial batch
     counts = norm_ratios(p_kmeans.labels_, p_init, range(n_clusters))
-
     set_ix = list()
     for i in range(len(counts)):
         pos = np.where(p_kmeans.labels_ == i)[0]
         set_ix = set_ix + np.random.choice(pos, size=counts[i], replace=False).tolist()
-
     annotated_ix = set_ix.copy()
-
     x_train_annotated = x_train[annotated_ix]    
     y_train_annotated = y_train[annotated_ix]
-
     p_model = tf.keras.models.Sequential([
       tf.keras.layers.Flatten(input_shape=x_train.shape[1:]),
       tf.keras.layers.Dense(128, activation='relu'),
       tf.keras.layers.Dense(NUMBER_OF_CLASSES)
-    ])
-    
+    ])    
     p_model.compile(
         optimizer=tf.keras.optimizers.Adam(0.001),
         loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
         metrics=[tf.keras.metrics.SparseCategoricalAccuracy()],
     )
-
     p_model.fit(
         x=x_train_annotated,
         y=y_train_annotated,
@@ -184,21 +170,16 @@ def active_cluster(
         validation_split=VALIDATION_SPLIT,
         verbose=0,
     )
-
     p_spent = p_epochs * (1 - VALIDATION_SPLIT) * len(x_train_annotated)
-
     _, metrics = p_model.evaluate(
         x=x_test,
         y=y_test,
         verbose=0,
     )
-
     p_metrics = [metrics]
     p_budget = [p_spent]
     p_annotated = [len(x_train_annotated)]
-
-    while p_metrics[-1] < target_accuracy:
-        
+    while p_metrics[-1] < target_accuracy:        
         # TODO: try alternative balancing methods, e.g.,
         # weak label distribution, match between weak and real label, ...
         preds = p_model.predict(x_train_annotated)
@@ -206,7 +187,6 @@ def active_cluster(
         misclassified_relative = np.where((preds_class - y_train_annotated)!=0)
         misclassified_pos = np.take(annotated_ix, misclassified_relative)
         misclassified_cluster_no = np.take(p_kmeans.labels_, misclassified_pos)
-
         # compute ratio of misclassified classes
         #counts_active = norm_ratios(
         #    misclassified_cluster_no.ravel(), 
@@ -215,11 +195,9 @@ def active_cluster(
         #    inclusion=False)        
         # TODO do this switch using a function
         counts_active = norm_ratios(p_kmeans.labels_, p_batch_size, range(n_clusters))
-
         # select new images to annotate with the given ratios
         ix_pool = np.delete(range(len(x_train)), annotated_ix)
         weak_labels_ix_pool = np.delete(p_kmeans.labels_, annotated_ix)
-
         set_ix = list()
         for i in range(len(counts_active)):
             pos = np.where(weak_labels_ix_pool == i)[0]                    
@@ -240,13 +218,10 @@ def active_cluster(
                         size=counts_active[i], 
                         replace=False).tolist()
             elif len(pos) > 0:
-                set_ix = set_ix + ix_pool[pos].tolist()    
-
+                set_ix = set_ix + ix_pool[pos].tolist()  
         annotated_ix = annotated_ix + set_ix
-
         x_train_annotated = x_train[annotated_ix]    
         y_train_annotated = y_train[annotated_ix]
-
         p_model.fit(
             x=x_train_annotated,
             y=y_train_annotated,
@@ -255,21 +230,17 @@ def active_cluster(
             validation_split=VALIDATION_SPLIT,
             verbose=0,
         )
-
         _, metrics = p_model.evaluate(
             x=x_test,
             y=y_test,
             verbose=0,
         )
-
         p_metrics.append(metrics)
         p_spent = p_spent + p_epochs * (1 - VALIDATION_SPLIT) * len(x_train_annotated)    
         p_budget.append(p_spent)
         p_annotated.append(len(x_train_annotated))
-
         if len(p_metrics) % 20 == 0:
-            print(p_metrics[-1], p_annotated[-1])
-            
+            print(p_metrics[-1], p_annotated[-1])            
     return p_metrics, p_budget, p_annotated
 
 
